@@ -2,7 +2,7 @@
 
 `ctxwire` is a Go package for propagating context values between HTTP requests and responses using HTTP headers. It simplifies passing metadata like tracing IDs, user info, or logs across services in a distributed system.
 
-It is a simpler alternative to OpenTelemetry.
+It is a simpler alternative to OpenTelemetry supporting back propagation of context values from upstream services to downstream ones.
 
 ## Features
 
