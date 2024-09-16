@@ -24,7 +24,7 @@ var (
 	keyLog logKey
 )
 
-func TestReceive(t *testing.T) {
+func TestBackPropagation(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(logProducerHandler))
 	t.Cleanup(server.Close)
 
@@ -49,20 +49,19 @@ func TestReceive(t *testing.T) {
 
 	// Client sends the request with a transport that extracts the query logs
 	// from the response headers.
-	c := http.Client{
-		Transport: ctxwire.Transport(http.DefaultTransport),
-	}
 	// The request is created with the context, to be able to extract the query logs
 	// from the response headers into it.
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/", nil)
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/", nil)
 	require.NoError(t, err)
-	_, err = c.Do(req)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	ctx, err = ctxwire.Extract(ctx, resp.Header)
 	require.NoError(t, err)
 
-	require.Equal(t, "bar", req.Context().Value(keyStr))
-	require.Equal(t, 42, req.Context().Value(keyInt))
+	require.Equal(t, "bar", ctx.Value(keyStr))
+	require.Equal(t, 42, ctx.Value(keyInt))
 
-	finalLogState := req.Context().Value(keyLog).(logState)
+	finalLogState := ctx.Value(keyLog).(logState)
 	var finalLog logEntry
 	for _, attr := range finalLogState.attrs {
 		attr(&finalLog)
