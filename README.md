@@ -2,6 +2,8 @@
 
 `ctxwire` is a Go package for propagating context values between HTTP requests and responses using HTTP headers. It simplifies passing metadata like tracing IDs, user info, or logs across services in a distributed system.
 
+It is a simpler alternative to OpenTelemetry.
+
 ## Features
 
 - Inject context values into HTTP headers for outgoing requests.
@@ -20,18 +22,7 @@ propagator := ctxwire.NewJSONPropagator("UserInfo", keyCtx{})
 ctxwire.Configure(propagator)
 ```
 
-### Inject context into HTTP response headers
-
-```go
-ctx := context.WithValue(context.Background(), ctxKey, yourValue)
-err := ctxwire.Inject(ctx, response.Header())
-```
-
-### Extract context values from HTTP request headers
-
-```go
-ctx, err := ctxwire.Extract(context.Background(), req.Header)
-```
+This needs to be done client and server side.
 
 ### Wrap HTTP transport
 
@@ -43,6 +34,19 @@ client := &http.Client{
 
 - Use `ctxwire.InjectTransport` for forward propagation
 - Use `ctxwire.ExtractTransport` for back propagation
+
+### Extract context values from HTTP request headers
+
+```go
+ctx, err := ctxwire.Extract(context.Background(), req.Header)
+```
+
+### Inject context into HTTP response headers
+
+```go
+ctx := context.WithValue(context.Background(), ctxKey, yourValue)
+err := ctxwire.Inject(ctx, response.Header())
+```
 
 ## Custom encoding
 
