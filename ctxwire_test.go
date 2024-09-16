@@ -3,6 +3,7 @@ package ctxwire_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -31,7 +32,7 @@ func TestBackPropagation(t *testing.T) {
 	ctxwire.Configure(
 		ctxwire.NewJSONPropagator("str", keyStr),
 		ctxwire.NewJSONPropagator("int", keyInt),
-		ctxwire.NewPropagator("log", keyLog,
+		ctxwire.NewValuePropagator("log", keyLog,
 			ctxwire.EncoderFunc(logEncoder),
 			ctxwire.DecoderFunc(logDecoder),
 		),
@@ -135,4 +136,47 @@ func logDecoder(ctx context.Context, key any, data []byte) (context.Context, err
 	}
 	v.attrs = append(slices.Clone(v.attrs), logWithJSONEntry(eJSON))
 	return context.WithValue(ctx, key, v), nil
+}
+
+type (
+	encodeKey struct{}
+	decodeKey struct{}
+)
+
+var (
+	keyEncode encodeKey
+	keyDecode decodeKey
+)
+
+func TestError(t *testing.T) {
+	ctxwire.Configure(
+		ctxwire.NewValuePropagator("encode", keyEncode,
+			ctxwire.EncoderFunc(errEncoder),
+			ctxwire.DecoderFunc(ctxwire.DecodeJSON)),
+		ctxwire.NewValuePropagator("decode", keyDecode,
+			ctxwire.EncoderFunc(ctxwire.EncodeJSON),
+			ctxwire.DecoderFunc(errDecoder)),
+	)
+
+	ctx := context.WithValue(context.Background(), keyEncode, "foo")
+	h := http.Header{}
+	err := ctxwire.Inject(ctx, h)
+	require.EqualError(t, err, "encode context value: failed!")
+
+	ctx = context.WithValue(context.Background(), keyDecode, "bar")
+	require.NoError(t, ctxwire.Inject(ctx, h))
+	_, err = ctxwire.Extract(context.Background(), h)
+	require.EqualError(t, err, "decode context value: failed!")
+}
+
+func errEncoder(ctx context.Context, key any) ([]byte, error) {
+	v := ctx.Value(key)
+	if v == nil {
+		return nil, nil
+	}
+	return nil, errors.New("failed!")
+}
+
+func errDecoder(_ context.Context, _ any, _ []byte) (context.Context, error) {
+	return nil, errors.New("failed!")
 }

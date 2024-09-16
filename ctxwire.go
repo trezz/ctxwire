@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sync"
@@ -18,6 +19,8 @@ type Error struct {
 	err     error
 }
 
+var _ error = (*Error)(nil)
+
 // Error implements the error interface.
 func (e *Error) Error() string {
 	return fmt.Sprintf("%s: %s", e.message, e.err.Error())
@@ -28,7 +31,11 @@ func (e *Error) Unwrap() error {
 	return e.err
 }
 
-func newError(message string, err error) *Error {
+func newError(message string, err error) error {
+	var ctxwireErr *Error
+	if errors.As(err, &ctxwireErr) {
+		return err
+	}
 	return &Error{message: message, err: err}
 }
 
@@ -41,10 +48,11 @@ type Propagator interface {
 	Extract(ctx context.Context, h http.Header) (context.Context, error)
 }
 
-// NewPropagator returns a new Propagator with the given name, context key,
-// encoder, and decoder.
-func NewPropagator(name string, contextKey any, encoder Encoder, decoder Decoder) Propagator {
-	return &propagator{
+// NewValuePropagator returns a new ValuePropagator with the given name.
+// The context key is used to store the context value in the context.
+// The encoder and decoder are used to encode and decode the context value.
+func NewValuePropagator(name string, contextKey any, encoder Encoder, decoder Decoder) *ValuePropagator {
+	return &ValuePropagator{
 		name:       name,
 		contextKey: contextKey,
 		encoder:    encoder,
@@ -52,13 +60,14 @@ func NewPropagator(name string, contextKey any, encoder Encoder, decoder Decoder
 	}
 }
 
-// NewJSONPropagator returns a new Propagator with the given name and context key
-// that uses JSON encoding and decoding.
-func NewJSONPropagator(name string, contextKey any) Propagator {
-	return NewPropagator(name, contextKey, EncoderFunc(jsonEncoder), DecoderFunc(jsonDecoder))
+// NewJSONPropagator returns a new ValuePropagator with the given name configured
+// to encode and decode the context value as JSON.
+// The context key is used to store the context value in the context.
+func NewJSONPropagator(name string, contextKey any) *ValuePropagator {
+	return NewValuePropagator(name, contextKey, EncoderFunc(encodeJSON), DecoderFunc(decodeJSON))
 }
 
-func jsonEncoder(ctx context.Context, key any) ([]byte, error) {
+func encodeJSON(ctx context.Context, key any) ([]byte, error) {
 	v := ctx.Value(key)
 	if v == nil {
 		return nil, nil
@@ -66,7 +75,7 @@ func jsonEncoder(ctx context.Context, key any) ([]byte, error) {
 	return json.Marshal(v)
 }
 
-func jsonDecoder(ctx context.Context, key any, data []byte) (context.Context, error) {
+func decodeJSON(ctx context.Context, key any, data []byte) (context.Context, error) {
 	var v any
 	if err := json.Unmarshal(data, &v); err != nil {
 		return nil, err
@@ -74,18 +83,22 @@ func jsonDecoder(ctx context.Context, key any, data []byte) (context.Context, er
 	return context.WithValue(ctx, key, v), nil
 }
 
-type propagator struct {
+// ValuePropagator propagates a single context value between requests and responses.
+// It implements the Propagator interface.
+type ValuePropagator struct {
 	name       string
 	contextKey any
 	encoder    Encoder
 	decoder    Decoder
 }
 
+var _ Propagator = (*ValuePropagator)(nil)
+
 // Inject implements the Propagator interface.
-func (p *propagator) Inject(ctx context.Context, h http.Header) error {
+func (p *ValuePropagator) Inject(ctx context.Context, h http.Header) error {
 	data, err := p.encoder.Encode(ctx, p.contextKey)
 	if err != nil {
-		return err
+		return newError("encode context value", err)
 	}
 	if len(data) == 0 {
 		return nil
@@ -95,27 +108,33 @@ func (p *propagator) Inject(ctx context.Context, h http.Header) error {
 }
 
 // Extract implements the Propagator interface.
-func (p *propagator) Extract(ctx context.Context, h http.Header) (context.Context, error) {
+func (p *ValuePropagator) Extract(ctx context.Context, h http.Header) (context.Context, error) {
 	vStr := h.Get(headerKey(p.name))
 	if vStr == "" {
 		return ctx, nil
 	}
 	v, err := base64.StdEncoding.DecodeString(vStr)
 	if err != nil {
-		return nil, err
+		return nil, newError("base64 decode context value", err)
 	}
-	return p.decoder.Decode(ctx, p.contextKey, v)
+	newCtx, err := p.decoder.Decode(ctx, p.contextKey, v)
+	if err != nil {
+		return nil, newError("decode context value", err)
+	}
+	return newCtx, nil
 }
 
 func headerKey(name string) string { return "x-ctxwire-" + name }
 
 // Encoder is an interface for encoding context values into bytes.
+// Errors returned by the encoder should be wrapped with ctxwire.NewError.
 type Encoder interface {
 	// Encode encodes the context value associated with the given key into bytes.
 	Encode(ctx context.Context, key any) (data []byte, err error)
 }
 
 // Decoder is an interface for decoding bytes into context values.
+// Errors returned by the encoder should be wrapped with ctxwire.NewError.
 type Decoder interface {
 	// Decode decodes the given data into a context value associated with the
 	// given key and returns a new context with the value set.
@@ -138,12 +157,38 @@ func (f DecoderFunc) Decode(ctx context.Context, key any, data []byte) (context.
 	return f(ctx, key, data)
 }
 
+// Configure configures the propagators to be used to propagate context values
+// between requests and responses.
+func Configure(propagators ...Propagator) {
+	register.add(propagators...)
+}
+
+// Inject injects the context values into the given headers.
+func Inject(ctx context.Context, h http.Header) error {
+	if err := register.Inject(ctx, h); err != nil {
+		return newError("inject context values", err)
+	}
+	return nil
+}
+
+// Extract extracts the context values from the given headers into a copy of
+// the given context.
+func Extract(ctx context.Context, h http.Header) (context.Context, error) {
+	newCtx, err := register.Extract(ctx, h)
+	if err != nil {
+		return nil, newError("extract context values", err)
+	}
+	return newCtx, nil
+}
+
 var register propagatorRegister
 
 type propagatorRegister struct {
 	mu          sync.Mutex
 	propagators []Propagator
 }
+
+var _ Propagator = (*propagatorRegister)(nil)
 
 func (r *propagatorRegister) add(propagators ...Propagator) {
 	r.mu.Lock()
@@ -163,12 +208,6 @@ func (r *propagatorRegister) Inject(ctx context.Context, h http.Header) error {
 	return nil
 }
 
-// Configure configures the propagators to be used to propagate context values
-// between requests and responses.
-func Configure(propagators ...Propagator) {
-	register.add(propagators...)
-}
-
 // Extract implements the Propagator interface.
 func (r *propagatorRegister) Extract(ctx context.Context, h http.Header) (context.Context, error) {
 	r.mu.Lock()
@@ -181,22 +220,4 @@ func (r *propagatorRegister) Extract(ctx context.Context, h http.Header) (contex
 		}
 	}
 	return ctx, nil
-}
-
-// Inject injects the context values into the given headers.
-func Inject(ctx context.Context, h http.Header) error {
-	if err := register.Inject(ctx, h); err != nil {
-		return newError("inject context into header", err)
-	}
-	return nil
-}
-
-// Extract extracts the context values from the given headers into a copy of
-// the given context.
-func Extract(ctx context.Context, h http.Header) (context.Context, error) {
-	newCtx, err := register.Extract(ctx, h)
-	if err != nil {
-		return nil, newError("extract context from header", err)
-	}
-	return newCtx, nil
 }

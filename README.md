@@ -39,18 +39,18 @@ ctx, err := ctxwire.Extract(context.Background(), req.Header)
 ## Custom encoding
 
 ```go
-func myEncoder(ctx context.Context, key any) ([]byte, error) {
+func myEncode(ctx context.Context, key any) ([]byte, error) {
     // Custom encoding logic
 })
 
-func myDecoder(ctx context.Context, key any, data []byte) (context.Context, error) {
+func myDecode(ctx context.Context, key any, data []byte) (context.Context, error) {
     // Custom decoding logic
 })
 
 func main() {
     propagator := ctxwire.NewPropagator("CustomKey", ctxKey,
-        ctxwire.EncoderFunc(myEncoder),
-        ctxwire.DecoderFunc(myDecoder))
+        ctxwire.EncoderFunc(myEncode),
+        ctxwire.DecoderFunc(myDecode))
     ctxwire.Configure(propagator)
 }
 ```
