@@ -1,11 +1,36 @@
+// Package ctxwire propagate context values between HTTP requests and responses
+// over the wire using HTTP headers.
 package ctxwire
 
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"sync"
 )
+
+// Error is the error type used by the package.
+// It wraps the original error and adds a message.
+type Error struct {
+	message string
+	err     error
+}
+
+// Error implements the error interface.
+func (e *Error) Error() string {
+	return fmt.Sprintf("%s: %s", e.message, e.err.Error())
+}
+
+// Unwrap implements the errors.Wrapper interface.
+func (e *Error) Unwrap() error {
+	return e.err
+}
+
+func newError(message string, err error) *Error {
+	return &Error{message: message, err: err}
+}
 
 // propagator propagates context values between requests and responses.
 type Propagator interface {
@@ -25,6 +50,28 @@ func NewPropagator(name string, contextKey any, encoder Encoder, decoder Decoder
 		encoder:    encoder,
 		decoder:    decoder,
 	}
+}
+
+// NewJSONPropagator returns a new Propagator with the given name and context key
+// that uses JSON encoding and decoding.
+func NewJSONPropagator(name string, contextKey any) Propagator {
+	return NewPropagator(name, contextKey, EncoderFunc(jsonEncoder), DecoderFunc(jsonDecoder))
+}
+
+func jsonEncoder(ctx context.Context, key any) ([]byte, error) {
+	v := ctx.Value(key)
+	if v == nil {
+		return nil, nil
+	}
+	return json.Marshal(v)
+}
+
+func jsonDecoder(ctx context.Context, key any, data []byte) (context.Context, error) {
+	var v any
+	if err := json.Unmarshal(data, &v); err != nil {
+		return nil, err
+	}
+	return context.WithValue(ctx, key, v), nil
 }
 
 type propagator struct {
