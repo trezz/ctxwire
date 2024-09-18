@@ -17,8 +17,7 @@ It is a simpler alternative to OpenTelemetry supporting back propagation of cont
 
 ```go
 type keyCtx struct{}
-propagator := ctxwire.NewJSONPropagator("UserInfo", keyCtx{})
-ctxwire.Configure(propagator)
+ctxwire.Configure(ctxwire.NewJSONPropagator("name", keyCtx{}))
 ```
 
 This needs to be done client and server side.
@@ -27,7 +26,7 @@ This needs to be done client and server side.
 
 ```go
 ctx := context.WithValue(context.Background(), ctxKey, yourValue)
-err := ctxwire.Inject(ctx, response.Header())
+err := ctxwire.Inject(ctx, respWriter.Header())
 ```
 
 ### Extract context values from HTTP request headers
@@ -48,10 +47,12 @@ func myDecode(ctx context.Context, key any, data []byte) (context.Context, error
 })
 
 func main() {
-    propagator := ctxwire.NewPropagator("CustomKey", ctxKey,
-        ctxwire.EncoderFunc(myEncode),
-        ctxwire.DecoderFunc(myDecode))
-    ctxwire.Configure(propagator)
+    ctxwire.Configure(
+        ctxwire.NewValuePropagator("name", keyCtx{},
+            ctxwire.EncoderFunc(myEncode),
+            ctxwire.DecoderFunc(myDecode),
+        ),
+    )
 }
 ```
 
